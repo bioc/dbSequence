@@ -1,6 +1,6 @@
 Package: dbSequence
 Title: DuckDB-Backed Interface for Large-Scale Genomic Data
-Version: 0.99.1
+Version: 0.99.2
 Authors@R: 
     c(
         person("Edward C.", "Ruiz", , "ecr7407@gmail.com", role = c("aut", "cre"),

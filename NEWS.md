@@ -1,4 +1,4 @@
-# dbSequence (development version)
+# dbSequence 0.99.2
 
 * `read_bed()`, `read_gff()` and `read_vcf()` no longer drop rows. Files with
   chromosome names like `1`, `X` and `MT` lost every non-numeric chromosome;
