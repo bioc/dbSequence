@@ -288,6 +288,42 @@ setMethod(
 #  Lazy file scans (no materialization)
 # ------------------------------------------------------------------------------
 
+#' Build the SQL that reads a BED, GFF or VCF text file.
+#'
+#' Every column is read as text, so chromosome names such as "1", "X" and
+#' "MT" are never mistaken for numbers (which made DuckDB drop rows). Only
+#' position and score columns are then converted to numbers: a malformed value
+#' becomes NA instead of removing the row. UCSC "track" and "browser" header
+#' lines are skipped.
+#' @keywords internal
+#' @noRd
+.text_scan_sql <- function(con, file_path, file_type) {
+  path <- DBI::dbQuoteString(con, normalizePath(file_path, winslash = "/", mustWork = TRUE))
+  scan_sql <- glue::glue(
+    "SELECT * FROM read_csv({path}, header = false, delim = '\t', comment = '#', ",
+    "all_varchar = true, null_padding = true) ",
+    "WHERE split_part(column0, ' ', 1) NOT IN ('track', 'browser')"
+  )
+
+  numeric_cols <- switch(
+    file_type,
+    "bed" = c(column1 = "BIGINT", column2 = "BIGINT", column4 = "DOUBLE"),
+    "gff" = c(column3 = "BIGINT", column4 = "BIGINT", column5 = "DOUBLE"),
+    "vcf" = c(column1 = "BIGINT", column5 = "DOUBLE")
+  )
+  present <- names(DBI::dbGetQuery(con, paste(scan_sql, "LIMIT 0")))
+  numeric_cols <- numeric_cols[names(numeric_cols) %in% present]
+  if (length(numeric_cols) == 0) {
+    return(scan_sql)
+  }
+
+  casts <- paste0(
+    "TRY_CAST(", names(numeric_cols), " AS ", numeric_cols, ") AS ", names(numeric_cols),
+    collapse = ", "
+  )
+  glue::glue("SELECT * REPLACE ({casts}) FROM ({scan_sql})")
+}
+
 #' @keywords internal
 #' @noRd
 .open_lazy_to_dbsequence <- function(
@@ -313,21 +349,7 @@ setMethod(
   # Establish a connection that stays alive via the returned tbl
   con <- .get_duckdb_connection(db_path)
 
-  file_path_norm <- normalizePath(file_path, winslash = "/", mustWork = TRUE)
-  quoted_path <- DBI::dbQuoteString(con, file_path_norm)
-
-  base_sql <- switch(
-    file_type,
-    "bed" = glue::glue(
-      "SELECT * FROM read_csv_auto({quoted_path}, header=false, delim='\t', comment='#', ignore_errors=true, null_padding=true)"
-    ),
-    "gff" = glue::glue(
-      "SELECT * FROM read_csv_auto({quoted_path}, header=false, delim='\t', comment='#', ignore_errors=true, null_padding=true)"
-    ),
-    "vcf" = glue::glue(
-      "SELECT * FROM read_csv_auto({quoted_path}, header=false, delim='\t', comment='#', ignore_errors=true, null_padding=true)"
-    )
-  )
+  base_sql <- .text_scan_sql(con, file_path, file_type)
 
   tbl_value <- dplyr::tbl(con, dbplyr::sql(base_sql))
 
@@ -654,15 +676,7 @@ setMethod(
     "bed" = {
       # Use DuckDB's direct CSV reading for BED
       create_sql <- glue::glue(
-        "
-        CREATE TABLE {table_name} AS 
-        SELECT * FROM read_csv_auto('{file_path}', 
-          header=false, 
-          delim='\t',
-          comment='#',
-          ignore_errors=true,
-          null_padding=true
-        )"
+        "CREATE TABLE {table_name} AS {.text_scan_sql(con, file_path, 'bed')}"
       )
       DBI::dbExecute(con, create_sql)
 
@@ -686,15 +700,7 @@ setMethod(
     "gff" = {
       # Use DuckDB's direct CSV reading for GFF
       create_sql <- glue::glue(
-        "
-        CREATE TABLE {table_name} AS 
-        SELECT * FROM read_csv_auto('{file_path}', 
-          header=false, 
-          delim='\t',
-          comment='#',
-          ignore_errors=true,
-          null_padding=true
-        )"
+        "CREATE TABLE {table_name} AS {.text_scan_sql(con, file_path, 'gff')}"
       )
       DBI::dbExecute(con, create_sql)
 
@@ -719,15 +725,7 @@ setMethod(
     "vcf" = {
       # Use DuckDB's direct CSV reading for VCF
       create_sql <- glue::glue(
-        "
-        CREATE TABLE {table_name} AS 
-        SELECT * FROM read_csv_auto('{file_path}', 
-          header=false, 
-          delim='\t',
-          comment='#',
-          ignore_errors=true,
-          null_padding=true
-        )"
+        "CREATE TABLE {table_name} AS {.text_scan_sql(con, file_path, 'vcf')}"
       )
       DBI::dbExecute(con, create_sql)
 
